@@ -35,11 +35,12 @@ OBJECTDIR=${CND_BUILDDIR}/${CND_CONF}/${CND_PLATFORM}
 
 # Object Files
 OBJECTFILES= \
+	${OBJECTDIR}/_ext/a2b43386/objecttemplates.o \
 	${OBJECTDIR}/main.o
 
 
 # C Compiler Flags
-CFLAGS=
+CFLAGS=-DTPM_POSIX
 
 # CC Compiler Flags
 CCFLAGS=-DTPM_POSIX
@@ -60,7 +61,12 @@ LDLIBSOPTIONS=-libmtss -libmtssutils -libmtssutils12
 
 ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation: ${OBJECTFILES}
 	${MKDIR} -p ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}
-	${LINK.cc} -o ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation ${OBJECTFILES} ${LDLIBSOPTIONS} -I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto
+	${LINK.cc} -o ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation ${OBJECTFILES} ${LDLIBSOPTIONS} -I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto -L/home/vt/Downloads/ibmtss1.3.0
+
+${OBJECTDIR}/_ext/a2b43386/objecttemplates.o: /home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c
+	${MKDIR} -p ${OBJECTDIR}/_ext/a2b43386
+	${RM} "$@.d"
+	$(COMPILE.c) -g -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/_ext/a2b43386/objecttemplates.o /home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c
 
 ${OBJECTDIR}/main.o: main.cpp
 	${MKDIR} -p ${OBJECTDIR}

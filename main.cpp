@@ -22,6 +22,7 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <cstring>
+#include "objecttemplates.h"
 
 using namespace std;
 
@@ -45,13 +46,18 @@ int main(int argc, char** argv) {
 // Simulate measured boot.
     // Powerup
     rc = TSS_Create(&tssContext);
-    rc = TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_OFF, "TPM2_PowerOffPlatform");   // Message only for printf
-    rc = TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_ON, "TPM2_PowerOnPlatform");
-    rc = TSS_TransmitPlatform(tssContext, TPM_SIGNAL_NV_ON, "TPM2_NvOnPlatform");
+    rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_OFF, "TPM2_PowerOffPlatform");   // Message only for printf
+    rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_ON, "TPM2_PowerOnPlatform");
+    rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_NV_ON, "TPM2_NvOnPlatform");
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
         return -1;
-    }    
+    }
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
     
     // Startup    
     rc = TSS_Create(&tssContext);   // Needed, but why?
@@ -63,6 +69,12 @@ int main(int argc, char** argv) {
                      NULL,
                      TPM_CC_Startup,
                      TPM_RH_NULL, NULL, 0);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Delete(tssContext);
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
         return -1;
@@ -83,28 +95,84 @@ int main(int argc, char** argv) {
     
 // Create a restricted RSA signing key.
 // Assume this key is trusted by the remote verifier.
+    //var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
     CreatePrimary_In inPrimary;
     CreatePrimary_Out outPrimary;
-    inPrimary.primaryHandle = TPM_RH_NULL;  //TPM_RH_NULL, TPM_RH_PLATFORM, TPM_RH_OWNER, TPM_RH_ENDORSEMENT
+    
+    inPrimary.primaryHandle = TPM_RH_OWNER;  //TPM_RH_NULL, TPM_RH_PLATFORM, TPM_RH_OWNER, TPM_RH_ENDORSEMENT
     inPrimary.inSensitive.sensitive.userAuth.t.size = 0;    // No key Password
+    inPrimary.inSensitive.sensitive.data.t.size = 0;
+    TPMA_OBJECT addObjectAttributes;
+    TPMA_OBJECT deleteObjectAttributes;
+    addObjectAttributes.val = 0;
+    addObjectAttributes.val |= TPMA_OBJECT_RESTRICTED;
+    addObjectAttributes.val |= TPMA_OBJECT_SIGN;
+    deleteObjectAttributes.val = 0;
+    rc = asymPublicTemplate(&inPrimary.inPublic.publicArea,
+				    addObjectAttributes,
+                                    deleteObjectAttributes,
+				    TYPE_ST,                    // keyType
+                                    TPM_ALG_RSA,                // algPublic
+                                    TPM_ECC_NONE,               // curveID
+                                    TPM_ALG_SHA256,             // nalg
+                                    TPM_ALG_SHA256,             // halg
+                                    NULL);                      // policyFilename
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    inPrimary.inPublic.publicArea.unique.rsa.t.size = 0;
+    inPrimary.outsideInfo.t.size = 0;
+    inPrimary.creationPCR.count = 0;
     
     rc = TSS_Create(&tssContext);
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
         return -1;
     }
+    
     rc = TSS_Execute(tssContext,
                     (RESPONSE_PARAMETERS *)&outPrimary, 
                     (COMMAND_PARAMETERS *)&inPrimary,
                     NULL,
                     TPM_CC_CreatePrimary,
-                    TPM_RS_PW, NULL, 0,
+                    TPM_RS_PW, NULL, 0,     // parentPasswordPtr
                     TPM_RH_NULL, NULL, 0);
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
         return -1;
     }
+    
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
 
+    
+// Remote attester generates a random nonce.
+// The challenge is sent to the host.
+//    unsigned int challenge = 0;
+//    // GetRandom
+//    GetRandom_In inRandom;
+//    GetRandom_Out outRandom;
+//    inRandom.bytesRequested = 8;
+//    rc = TSS_Execute(tssContext,
+//                    (RESPONSE_PARAMETERS *)&outRandom, 
+//                    (COMMAND_PARAMETERS *)&inRandom,
+//                    NULL,
+//                    TPM_CC_GetRandom,
+//                    TPM_RH_NULL, NULL, 0);  // TPM_RH_NULL, NULL, 0 terminates a list of 3-tuples with additional handlers
+//    memcpy(&challenge, outRandom.randomBytes.t.buffer, outRandom.randomBytes.t.size);
+
+    
+// Sign PCR quote with random nonce.
+    
+    
+    
+    
+// Unload key.    
+    
     return 0;
 }
 
@@ -115,22 +183,23 @@ int MeasureElement(string description, string data, int pcr) {
     DigestMessage(data.c_str(), data.length(), &digest, &digestLen);
     if(32 != digestLen)
         return -1;
-    boot_log[boot_log_i] = (boot_log_t){
-                                .description = description,
-                                .pcr = pcr,
-                                .digest = digest,
-                                .digestLen = digestLen};
+    boot_log[boot_log_i] = (boot_log_t){.description = description,
+                                        .pcr = pcr,
+                                        .digest = digest,
+                                        .digestLen = digestLen};
     boot_log_i++;
     
     // Extend PCR with digest.
     TPM_RC rc = 0;
     TSS_CONTEXT *tssContext = NULL;
     PCR_Extend_In inExtend;
-    inExtend.digests.count = digestLen;
+    inExtend.digests.count = 1;
     inExtend.digests.digests[0].hashAlg = TPM_ALG_SHA256;
-    memcpy(inExtend.digests.digests[0].digest.sha256, digest, digestLen);
+    memset((uint8_t *)&inExtend.digests.digests[0].digest, 0, sizeof(TPMU_HA)); // sizeof(TPMU_HA)=128
+    memcpy((uint8_t *)&inExtend.digests.digests[0].digest, "Hallo", strlen("Hallo")); //digest, digestLen);
     inExtend.pcrHandle = pcr;
     
+    //TSS_SetProperty(NULL, TPM_TRACE_LEVEL, "1");
     rc = TSS_Create(&tssContext);
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
@@ -148,7 +217,7 @@ int MeasureElement(string description, string data, int pcr) {
         return -1;
     }
     
-    rc = TSS_Delete(tssContext);
+    rc = TSS_Delete(tssContext);        // Always delete the context after it is no longer needed
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
         return -1;

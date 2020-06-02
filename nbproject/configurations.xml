@@ -13,6 +13,8 @@
                    displayName="Source Files"
                    projectFiles="true">
       <itemPath>main.cpp</itemPath>
+      <itemPath>/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c</itemPath>
+      <itemPath>/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.h</itemPath>
     </logicalFolder>
     <logicalFolder name="TestFiles"
                    displayName="Test Files"
@@ -26,6 +28,9 @@
       <itemPath>Makefile</itemPath>
     </logicalFolder>
   </logicalFolder>
+  <sourceRootList>
+    <Elem>/home/vt/Downloads/ibmtss1.3.0/utils</Elem>
+  </sourceRootList>
   <projectmakefile>Makefile</projectmakefile>
   <confs>
     <conf name="Debug" type="1">
@@ -35,6 +40,9 @@
         <rebuildPropChanged>false</rebuildPropChanged>
       </toolsSet>
       <compileType>
+        <cTool>
+          <commandLine>-DTPM_POSIX</commandLine>
+        </cTool>
         <ccTool>
           <incDir>
             <pElem>/home/vt/Downloads/ibmtss1.3.0/utils</pElem>
@@ -47,9 +55,19 @@
             <linkerLibLibItem>ibmtssutils</linkerLibLibItem>
             <linkerLibLibItem>ibmtssutils12</linkerLibLibItem>
           </linkerLibItems>
-          <commandLine>-I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto</commandLine>
+          <commandLine>-I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto -L/home/vt/Downloads/ibmtss1.3.0</commandLine>
         </linkerTool>
       </compileType>
+      <item path="/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c"
+            ex="false"
+            tool="0"
+            flavor2="0">
+      </item>
+      <item path="/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.h"
+            ex="false"
+            tool="3"
+            flavor2="0">
+      </item>
       <item path="main.cpp" ex="false" tool="1" flavor2="0">
       </item>
     </conf>
@@ -73,6 +91,16 @@
           <developmentMode>5</developmentMode>
         </asmTool>
       </compileType>
+      <item path="/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c"
+            ex="false"
+            tool="0"
+            flavor2="0">
+      </item>
+      <item path="/home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.h"
+            ex="false"
+            tool="3"
+            flavor2="0">
+      </item>
       <item path="main.cpp" ex="false" tool="1" flavor2="0">
       </item>
     </conf>
