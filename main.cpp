@@ -79,6 +79,11 @@ int main(int argc, char** argv) {
         ErrorCodePlotter(rc);
         return -1;
     }
+
+    // Init PCRs with 0?
+    
+    
+    
     
 // CRTM measures the firmware and passes control to it.
     if(0 != MeasureElement("Firmware ver 1234", "Firmware blob", 0))
@@ -98,6 +103,7 @@ int main(int argc, char** argv) {
     //var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
     CreatePrimary_In inPrimary;
     CreatePrimary_Out outPrimary;
+    TPMI_DH_OBJECT signHandle = 0;
     
     inPrimary.primaryHandle = TPM_RH_OWNER;  //TPM_RH_NULL, TPM_RH_PLATFORM, TPM_RH_OWNER, TPM_RH_ENDORSEMENT
     inPrimary.inSensitive.sensitive.userAuth.t.size = 0;    // No key Password
@@ -143,6 +149,8 @@ int main(int argc, char** argv) {
         return -1;
     }
     
+    signHandle = outPrimary.objectHandle;
+    
     rc = TSS_Delete(tssContext);
     if(TPM_RC_SUCCESS != rc){
         ErrorCodePlotter(rc);
@@ -152,29 +160,110 @@ int main(int argc, char** argv) {
     
 // Remote attester generates a random nonce.
 // The challenge is sent to the host.
-//    unsigned int challenge = 0;
-//    // GetRandom
-//    GetRandom_In inRandom;
-//    GetRandom_Out outRandom;
-//    inRandom.bytesRequested = 8;
-//    rc = TSS_Execute(tssContext,
-//                    (RESPONSE_PARAMETERS *)&outRandom, 
-//                    (COMMAND_PARAMETERS *)&inRandom,
-//                    NULL,
-//                    TPM_CC_GetRandom,
-//                    TPM_RH_NULL, NULL, 0);  // TPM_RH_NULL, NULL, 0 terminates a list of 3-tuples with additional handlers
-//    memcpy(&challenge, outRandom.randomBytes.t.buffer, outRandom.randomBytes.t.size);
+    unsigned int challenge = 0;
+    // GetRandom
+    GetRandom_In inRandom;
+    GetRandom_Out outRandom;
+    inRandom.bytesRequested = 4;    // Not sure how long it should be. 4 bytes fit in an Int
+    rc = TSS_Create(&tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Execute(tssContext,
+                    (RESPONSE_PARAMETERS *)&outRandom, 
+                    (COMMAND_PARAMETERS *)&inRandom,
+                    NULL,
+                    TPM_CC_GetRandom,
+                    TPM_RH_NULL, NULL, 0);  // TPM_RH_NULL, NULL, 0 terminates a list of 3-tuples with additional handlers
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    memcpy(&challenge, outRandom.randomBytes.t.buffer, outRandom.randomBytes.t.size);
+    
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
 
     
 // Sign PCR quote with random nonce.
+    // Quote
+    // Unlike TPM2_PCR_Read() it gives a digest of the selected PCRs
+    // Does not take the challenge as input yet
+    Quote_In inQuote;
+    Quote_Out outQuote;
+    
+    inQuote.PCRselect.pcrSelections[0].sizeofSelect = 3;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] = 0;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[1] = 0;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[2] = 0;
+    // accumulate PCR select bits: inQuote.PCRselect.pcrSelections[0].pcrSelect[pcrHandle / 8] |= 1 << (pcrHandle % 8);
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] |= (1<<0) | (1<<1);
+    inQuote.PCRselect.count = 2;
+    inQuote.PCRselect.pcrSelections[0].hash = TPM_ALG_SHA256;
+    inQuote.signHandle = signHandle;
+    inQuote.inScheme.scheme = TPM_ALG_RSASSA;
+    inQuote.inScheme.details.rsassa.hashAlg = TPM_ALG_SHA256;
+    memcpy(inQuote.qualifyingData.t.buffer, &challenge, sizeof(challenge));
+    inQuote.qualifyingData.t.size = sizeof(challenge);
     
     
+    rc = TSS_Create(&tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Execute(tssContext,
+                    (RESPONSE_PARAMETERS *)&outQuote,
+                    (COMMAND_PARAMETERS *)&inQuote,
+                    NULL,
+                    TPM_CC_Quote,
+                    TPM_RS_PW, NULL, 0,
+                    TPM_RH_NULL, NULL, 0);
+    if(TPM_RC_SUCCESS != rc){
+        printf("hier?\n");
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
     
     
-// Unload key.    
+// Unload key.
+// Build forge RSA public key.
+// Build forge signature blob.
+// Compute message digest.
+// Remote attester verifies signature.
+// Unmarshal the serialized TPMS_ATTEST buffer.
+// Extract the nonce from the tpm2b_attest buffer.
+  // It should match the random challenge that we sent. This proves the attested data is fresh.
+// Playback digests from boot_log.
+// app.Quote selects PCR0, PCR1, PCR2 and PCR3. Therefore, the expected quote
+  // is the digest of <PCR0, PCR1, PCR2, PCR3>.  
+// Extract selected PCRs digest from the tpm2b_attest buffer.
+  // It should match the expected digest computed above.
+// Boot log's integrity is verified. Its contents can be used for host integrity evaluation.
+    
+    
     
     return 0;
 }
+
+
+
+
+
+
 
 int MeasureElement(string description, string data, int pcr) {
     // Add digest to event log.
