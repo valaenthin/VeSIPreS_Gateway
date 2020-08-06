@@ -107,12 +107,19 @@ int main(int argc, char** argv) {
 /***************************************************************
  *  Establish a TCP connection with the Client
  ***************************************************************/
-    
+    while(true)
+    {
     // Create a socket
     int sockListen = socket(AF_INET, SOCK_STREAM, 0);
     if (sockListen == -1)
     {
         cerr << "Can't create a socket! Quitting" << endl;
+        return -1;
+    }
+    int enable = 1;
+    if (setsockopt(sockListen, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
+        {
+        cerr << "setsockopt(SO_REUSEADDR) failed" << endl;
         return -1;
     }
  
@@ -164,6 +171,7 @@ int main(int argc, char** argv) {
     char recvBuf[4096];
     memset(recvBuf, 0, 4096);
     int recvBufLen = 0;
+    
     
     // Wait for client to send data 
     recvBufLen = recv(clientSocket, &recvBuf[recvBufLen], 4096, 0);
@@ -261,9 +269,11 @@ int main(int argc, char** argv) {
     send(clientSocket, sendString.c_str(), sendString.length(), 0);  // +1?
     cout << "answer sent: " << sendString << endl;
     cout << "answer sent length: " << sendString.length() << endl;
+    
+    
     // Close the socket
     close(clientSocket);
-    
+    }   //while1
     return 0;
 }
 
@@ -288,7 +298,7 @@ int MeasureElement(string description, string data, int pcr) {
     inExtend.digests.count = 1;
     inExtend.digests.digests[0].hashAlg = TPM_ALG_SHA256;
     memset((uint8_t *)&inExtend.digests.digests[0].digest, 0, sizeof(TPMU_HA)); // sizeof(TPMU_HA)=128
-    memcpy((uint8_t *)&inExtend.digests.digests[0].digest, "Hallo", strlen("Hallo")); //digest, digestLen);
+    memcpy((uint8_t *)&inExtend.digests.digests[0].digest, digest, digestLen);
     inExtend.pcrHandle = pcr;
     
     //TSS_SetProperty(NULL, TPM_TRACE_LEVEL, "1");
