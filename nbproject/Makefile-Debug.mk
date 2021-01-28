@@ -57,11 +57,11 @@ LDLIBSOPTIONS=-libmtss -libmtssutils -libmtssutils12
 
 # Build Targets
 .build-conf: ${BUILD_SUBPROJECTS}
-	"${MAKE}"  -f nbproject/Makefile-${CND_CONF}.mk ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation
+	"${MAKE}"  -f nbproject/Makefile-${CND_CONF}.mk ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/vesipres_gateway
 
-${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation: ${OBJECTFILES}
+${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/vesipres_gateway: ${OBJECTFILES}
 	${MKDIR} -p ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}
-	${LINK.cc} -o ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/attestation ${OBJECTFILES} ${LDLIBSOPTIONS} -I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto -L/home/vt/Downloads/ibmtss1.3.0
+	${LINK.cc} -o ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/vesipres_gateway ${OBJECTFILES} ${LDLIBSOPTIONS} -I/opt/ssl/include/ -L/opt/ssl/lib/ -lcrypto -L/home/vt/Downloads/ibmtss1.3.0
 
 ${OBJECTDIR}/_ext/a2b43386/objecttemplates.o: /home/vt/Downloads/ibmtss1.3.0/utils/objecttemplates.c
 	${MKDIR} -p ${OBJECTDIR}/_ext/a2b43386

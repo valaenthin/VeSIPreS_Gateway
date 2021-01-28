@@ -24,7 +24,7 @@ CLEAN_SUBPROJECTS=${CLEAN_SUBPROJECTS_${SUBPROJECTS}}
 
 
 # Project Name
-PROJECTNAME=Attestation
+PROJECTNAME=VeSIPreS Gateway
 
 # Active Configuration
 DEFAULTCONF=Debug

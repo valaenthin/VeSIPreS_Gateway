@@ -1,12 +1,9 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
-
 /* 
+ * VeSIPreS Vehicle Simulator
+ * 
+ * 
  * File:   main.cpp
- * Author: vt
+ * Author: Valaenthin Tratter (valaenthin.tratter@tum.de)
  *
  * Created on May 22, 2020, 10:01 AM
  */
@@ -16,7 +13,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-#include <ibmtss/tss.h> // Official tss; consists of create, delete, execute
+#include <ibmtss/tss.h> // Official tss; contains 'create', 'delete', 'execute'
 #include <ibmtss/tssresponsecode.h>
 #include <ibmtss/tsstransmit.h>	/* for simulator power up */
 #include <openssl/sha.h>
@@ -30,22 +27,33 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <string.h>
+#include <fstream>
 
 using namespace std;
 using json = nlohmann::json;    // for convenience
 
-typedef struct {string description; int pcr; unsigned char *digest; unsigned int digestLen;} boot_log_t;
-boot_log_t boot_log[10];    // create a string array as boot record
-int boot_log_i = 0;
+// Boot log
+typedef struct {string description; int pcr; unsigned char *digest; unsigned int digestLen;} bootLog_t;
+bootLog_t bootLog[10];    // create a string array as boot record
+int bootLogIndex = 0;
 
 int DigestMessage(const char *message, size_t messageLen, unsigned char **digest, unsigned int *digestLen);
 int MeasureElement(string description, string data, int pcr);
 void ErrorCodePlotter(TPM_RC rc);
 
 /*
- * 
+ * Main function containing measured boot, connection establishment and reporting
  */
 int main(int argc, char** argv) {
+    cout << "****************************************************************" << endl;
+    cout << "*                                                              *" << endl;
+    cout << "*                VeSIPreS Vehicle Simulator                    *" << endl;
+    cout << "*                                                              *" << endl;
+    cout << "*      Vehicle Gateway and ECU emulator for VeSIPreS PoC       *" << endl;
+    cout << "*                                                              *" << endl;
+    cout << "****************************************************************" << endl<< endl;
+    
+    cout << "Boot sequence started..." << endl;
     
  /***************************************************************
  *  Measured boot
@@ -55,7 +63,7 @@ int main(int argc, char** argv) {
     
     // Powerup
     rc = TSS_Create(&tssContext);
-    rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_OFF, "TPM2_PowerOffPlatform");   // Message only for printf
+    rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_OFF, "TPM2_PowerOffPlatform");   // Last parameter only for console printout
     rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_POWER_ON, "TPM2_PowerOnPlatform");
     rc |= TSS_TransmitPlatform(tssContext, TPM_SIGNAL_NV_ON, "TPM2_NvOnPlatform");
     if(TPM_RC_SUCCESS != rc){
@@ -69,7 +77,7 @@ int main(int argc, char** argv) {
     }
     
     // Startup    
-    rc = TSS_Create(&tssContext);   // Needed, but why?
+    rc = TSS_Create(&tssContext);   // New context needed for startup
     Startup_In inStart;
     inStart.startupType = TPM_SU_CLEAR;
     rc = TSS_Execute(tssContext,
@@ -89,7 +97,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Init PCRs with 0?
+    // Init PCRs not needed since TPM automatically initializes at power on
     
     // CRTM measures the firmware and passes control to it.
     if(0 != MeasureElement("Firmware ver 1234", "Firmware blob", 0))
@@ -103,45 +111,108 @@ int main(int argc, char** argv) {
     // Boot loader measures the OS kernel and passes control to it.
     if(0 != MeasureElement("Kernel file /boot/vmlinuz-linux", "Kernel blob", 1))
         return -1;
+
+    cout << "Measured boot complete" << endl;
+/***************************************************************
+ *  Create a (restricted) RSA signing key
+ ***************************************************************/
+// This key is trusted by the remote verifier. Certificate is created at production time of the vehicle by the OEM.
+    CreatePrimary_In inPrimary;
+    CreatePrimary_Out outPrimary;
+    TPMI_DH_OBJECT signHandle = 0;
     
+    inPrimary.primaryHandle = TPM_RH_OWNER;  //TPM_RH_NULL, TPM_RH_PLATFORM, TPM_RH_OWNER, TPM_RH_ENDORSEMENT
+    inPrimary.inSensitive.sensitive.userAuth.t.size = 0;    // No key Password
+    inPrimary.inSensitive.sensitive.data.t.size = 0;
+    TPMA_OBJECT addObjectAttributes;
+    TPMA_OBJECT deleteObjectAttributes;
+    addObjectAttributes.val = 0;
+    addObjectAttributes.val |= TPMA_OBJECT_RESTRICTED;
+    addObjectAttributes.val |= TPMA_OBJECT_SIGN;
+    deleteObjectAttributes.val = 0;
+    rc = asymPublicTemplate(&inPrimary.inPublic.publicArea,
+				    addObjectAttributes,
+                                    deleteObjectAttributes,
+				    TYPE_ST,                    // keyType
+                                    TPM_ALG_RSA,                // algPublic
+                                    TPM_ECC_NONE,               // curveID
+                                    TPM_ALG_SHA256,             // nalg
+                                    TPM_ALG_SHA256,             // halg
+                                    NULL);                      // policyFilename
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    inPrimary.inPublic.publicArea.unique.rsa.t.size = 0;
+    inPrimary.outsideInfo.t.size = 0;
+    inPrimary.creationPCR.count = 0;
+    
+    rc = TSS_Create(&tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Execute(tssContext,
+                    (RESPONSE_PARAMETERS *)&outPrimary, 
+                    (COMMAND_PARAMETERS *)&inPrimary,
+                    NULL,
+                    TPM_CC_CreatePrimary,
+                    TPM_RS_PW, NULL, 0,     // parentPasswordPtr
+                    TPM_RH_NULL, NULL, 0);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    signHandle = outPrimary.objectHandle;
+    
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    cout << "RSA signing key created" << endl;
+    
+    while(true) // main loop
+    {
+        
 /***************************************************************
  *  Establish a TCP connection with the Client
  ***************************************************************/
-    while(true)
-    {
     // Create a socket
     int sockListen = socket(AF_INET, SOCK_STREAM, 0);
     if (sockListen == -1)
     {
-        cerr << "Can't create a socket! Quitting" << endl;
+        cerr << "Error: Can't create a socket! Quitting" << endl;
         return -1;
     }
     int enable = 1;
     if (setsockopt(sockListen, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
         {
-        cerr << "setsockopt(SO_REUSEADDR) failed" << endl;
+        cerr << "Error: setsockopt(SO_REUSEADDR) failed" << endl;
         return -1;
     }
  
-    // Bind the ip address and port to a socket
+    // Bind IP address and port to a socket
     sockaddr_in hint;
     hint.sin_family = AF_INET;
     hint.sin_port = htons(7777);
-    inet_pton(AF_INET, "0.0.0.0", &hint.sin_addr);  // any ip address
+    inet_pton(AF_INET, "0.0.0.0", &hint.sin_addr);  // any ip address accepted
  
     if (bind(sockListen, (sockaddr*)&hint, sizeof(hint)) == -1)  //connect socket to port
     {
-        cerr << "Can't bind to IP/port" << endl;
+        cerr << "Error: Can't bind to IP/port" << endl;
         return -1;
     }
  
     // Make the socket for listening in
     if( listen(sockListen, SOMAXCONN) == -1)
     {
-        cerr << "Can't listen" << endl;
+        cerr << "Error: Can't listen" << endl;
         return -1;
     }
- 
+    
     // Wait for a connection
     sockaddr_in client;
     socklen_t clientSize = sizeof(client);
@@ -168,6 +239,7 @@ int main(int argc, char** argv) {
     // Close listening socket
     close(sockListen);
  
+    // initialize receiving buffer
     char recvBuf[4096];
     memset(recvBuf, 0, 4096);
     int recvBufLen = 0;
@@ -181,44 +253,98 @@ int main(int argc, char** argv) {
         close(clientSocket);
         return -1;
     }
-    cout << "Request received " << endl;
-        
-    cout << "Received message: "<< string(recvBuf, 0, recvBufLen) << endl;  // Print received message
+    
+    cout << "Request received: "<< string(recvBuf, 0, recvBufLen) << endl;  // Print received message
     
     
 /***************************************************************
  *  Process received command from client
  ***************************************************************/
     json jRequest;
-    long nonce;
+    long nonceG;
     try {
          jRequest = json::parse(recvBuf);  // When it tries to parse nonsense, it gives SIGABRT 
 
         if (jRequest["Request"] != 1)  // Request = 1: full vehicle status measurement 
         {
-            cerr << "Invalid request received" << endl;
+            cerr << "Error: Invalid request received" << endl;
             return -1;
         }
 
-        nonce = jRequest["Nonce"];
-        cout << "Nonce: " << nonce << endl;
+        nonceG = jRequest["NonceG"];
     } catch(...){
-        cerr << "Error while parsing JSON!"<< endl;
+        cerr << "Error: Parsing JSON"<< endl;
+        return -1;
+    }
+
+/***************************************************************
+ *  Quote PCR from measured boot
+ ***************************************************************/ 
+    int pcrQuote = 0;
+    // Sign PCR quote with random nonce.
+    // Quote
+    // Unlike TPM2_PCR_Read() it gives a digest of the selected PCRs
+    // Does not take the challenge as input yet
+    /*Quote_In inQuote;
+    Quote_Out outQuote;
+    
+    inQuote.PCRselect.pcrSelections[0].sizeofSelect = 3;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] = 0;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[1] = 0;
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[2] = 0;
+    // accumulate PCR select bits: inQuote.PCRselect.pcrSelections[0].pcrSelect[pcrHandle / 8] |= 1 << (pcrHandle % 8);
+    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] |= (1<<0) | (1<<1);
+    inQuote.PCRselect.count = 2;
+    inQuote.PCRselect.pcrSelections[0].hash = TPM_ALG_SHA256;
+    inQuote.signHandle = signHandle;
+    inQuote.inScheme.scheme = TPM_ALG_RSASSA;
+    inQuote.inScheme.details.rsassa.hashAlg = TPM_ALG_SHA256;
+    memcpy(inQuote.qualifyingData.t.buffer, &nonceG, sizeof(nonceG));
+    inQuote.qualifyingData.t.size = sizeof(nonceG);
+    
+    
+    rc = TSS_Create(&tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
         return -1;
     }
     
- /***************************************************************
+    rc = TSS_Execute(tssContext,
+                    (RESPONSE_PARAMETERS *)&outQuote,
+                    (COMMAND_PARAMETERS *)&inQuote,
+                    NULL,
+                    TPM_CC_Quote,
+                    TPM_RS_PW, NULL, 0,
+                    TPM_RH_NULL, NULL, 0);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+    
+    rc = TSS_Delete(tssContext);
+    if(TPM_RC_SUCCESS != rc){
+        ErrorCodePlotter(rc);
+        return -1;
+    }
+   */ 
+/***************************************************************
  *  Send commands to ECUs
  ***************************************************************/   
     // Create a nonce for every ECU and send them
-    int numberEcu = 3;
-    int nonceEcu[numberEcu];
-    for(int i=0; i<numberEcu; i++)
+    const int EcuCount = 3;
+    int EcuNonce[EcuCount]; // Not needed for implemented security stage (SL)
+    string EcuDigest[EcuCount];
+    const string EcuAddress[EcuCount] = {"/home/vt/Desktop/Ecu0SoftwareStack.bin",
+        "/home/vt/Desktop/Ecu1SoftwareStack.bin",
+        "/home/vt/Desktop/Ecu2SoftwareStack.bin"};
+    
+    cout << "Create Nonce for ECUs..." << endl;
+    for(int i=0; i<EcuCount; i++)
     {
         // GetRandom
         GetRandom_In inRandom;
         GetRandom_Out outRandom;
-        inRandom.bytesRequested = 4;    // Not sure how long it should be. 4 bytes fit in an Int
+        inRandom.bytesRequested = sizeof(int);
         rc = TSS_Create(&tssContext);
         if(TPM_RC_SUCCESS != rc){
             ErrorCodePlotter(rc);
@@ -230,13 +356,13 @@ int main(int argc, char** argv) {
                         (COMMAND_PARAMETERS *)&inRandom,
                         NULL,
                         TPM_CC_GetRandom,
-                        TPM_RH_NULL, NULL, 0);  // TPM_RH_NULL, NULL, 0 terminates a list of 3-tuples with additional handlers
+                        TPM_RH_NULL, NULL, 0);  // [TPM_RH_NULL, NULL, 0] terminates a list of 3-tuples with additional handlers
         if(TPM_RC_SUCCESS != rc){
             ErrorCodePlotter(rc);
             return -1;
         }
 
-        memcpy(&nonceEcu[i], outRandom.randomBytes.t.buffer, outRandom.randomBytes.t.size);
+        memcpy(&EcuNonce[i], outRandom.randomBytes.t.buffer, outRandom.randomBytes.t.size);
 
         rc = TSS_Delete(tssContext);
         if(TPM_RC_SUCCESS != rc){
@@ -244,36 +370,74 @@ int main(int argc, char** argv) {
             return -1;
         }
     }
-    
+    cout << "Measure ECUs" << endl;
     // ECUs:
-    for(int i=0; i<numberEcu; i++)
+    for(int i=0; i < EcuCount; i++)
     {
+        //      read file    
+        streampos softwareStackSize;
+        char * softwareStack;
+        ifstream file (EcuAddress[i], ios::in|ios::binary|ios::ate);
+
+        if (file.is_open())
+        {
+          softwareStackSize = file.tellg();
+          softwareStack = new char [softwareStackSize];
+          file.seekg (0, ios::beg);
+          file.read (softwareStack, softwareStackSize);
+          file.close();
+
+          cout << "File read for ECU" << i<<  endl;
+        }
+        else cerr << "Error: Unable to open file for ECU" << i<<  endl;
+
+
+        // calculate digest    
+        unsigned char digest[20];
+        SHA1(reinterpret_cast<const unsigned char *>(softwareStack), softwareStackSize, digest);
+        delete[] softwareStack;
+
+        char digest_string[40];
+        for (int j = 0; j < 20; j++) {
+            snprintf(&digest_string[2*j], 20, "%02x", digest[j]);
+        }
+
+        EcuDigest[i] = digest_string;
+        cout << "Digest for ECU" << i << ": "<< EcuDigest[i]<< endl;
         
     }
     
 /***************************************************************
  *  Send answer back to client
  ***************************************************************/    
+    // create answer JSON
     json jAnswer;
-    
-    jAnswer["PCR"]["PCR1"] = 0xABC; // Dummy long
-    jAnswer["PCR"]["PCR2"] = 0xABC; // Dummy long
-    jAnswer["PCR"]["Nonce"] = 0xABC; // Dummy long
-    jAnswer["PCR"]["Signature"] = 0xABC; // Dummy long
-    
-    jAnswer["EventLog"] = "Dummy string";
+    jAnswer["Pcr"] = pcrQuote;
+    for(int i = 0; i < bootLogIndex; i++)
+    {
+        jAnswer["BootLog"][i]["description"] = bootLog[i].description;
+        jAnswer["BootLog"][i]["digest"] = *bootLog[i].digest;   //VT
+        jAnswer["BootLog"][i]["digestLen"] = bootLog[i].digestLen;
+        jAnswer["BootLog"][i]["pcr"] = bootLog[i].pcr;
+    }
+    for(int i = 0; i < EcuCount; i++)
+    {
+        jAnswer["EcuReport"][i]["digest"] = EcuDigest[i];
+    }
     
     string sendString = jAnswer.dump();
     // char sendBuf[4096];
     
     send(clientSocket, sendString.c_str(), sendString.length(), 0);  // +1?
-    cout << "answer sent: " << sendString << endl;
-    cout << "answer sent length: " << sendString.length() << endl;
+    // cout << "answer sent: " << sendString << endl;
+    // cout << "answer sent length: " << sendString.length() << endl;
     
-    
+    cout << "Answer sent" << endl;
+    cout << "Transmission complete!" << endl << endl;
     // Close the socket
     close(clientSocket);
-    }   //while1
+    
+    } //main loop
     return 0;
 }
 
@@ -285,11 +449,11 @@ int MeasureElement(string description, string data, int pcr) {
     DigestMessage(data.c_str(), data.length(), &digest, &digestLen);
     if(32 != digestLen)
         return -1;
-    boot_log[boot_log_i] = (boot_log_t){.description = description,
+    bootLog[bootLogIndex] = (bootLog_t){.description = description,
                                         .pcr = pcr,
                                         .digest = digest,
                                         .digestLen = digestLen};
-    boot_log_i++;
+    bootLogIndex++;
     
     // Extend PCR with digest.
     TPM_RC rc = 0;
@@ -329,16 +493,6 @@ int MeasureElement(string description, string data, int pcr) {
 }
 
 int DigestMessage(const char *message, size_t messageLen, unsigned char **digest, unsigned int *digestLen){
-    /* Alternative way (found only later):
-        messageDigest.hashAlg = TPM_ALG_SHA256;
-        // hash algorithm mapped to size
-        sizeInBytes = TSS_GetDigestSize(messageDigest.hashAlg);
-        rc = TSS_Hash_Generate(&messageDigest,
-                               strlen(messageString), messageString,
-                               0, NULL);    
-     */
-    
-    
     // Create a Message Digest context and allocate space for digest
     EVP_MD_CTX *mdctx;
     if((mdctx = EVP_MD_CTX_new()) == NULL)
@@ -346,7 +500,7 @@ int DigestMessage(const char *message, size_t messageLen, unsigned char **digest
     if((*digest = (unsigned char *)OPENSSL_malloc(EVP_MD_size(EVP_sha256()))) == NULL)
         return -1;
     
-    // Initialise the context by identifying the algorithm to be used (built-in algorithms are defined in evp.h)
+    // Initialize the context by identifying the algorithm to be used (built-in algorithms are defined in evp.h)
     if(1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL))
         return -1;
     
@@ -354,7 +508,7 @@ int DigestMessage(const char *message, size_t messageLen, unsigned char **digest
     if(1 != EVP_DigestUpdate(mdctx, message, messageLen))
         return -1;
     
-    // Caclulate the digest
+    // Calculate the digest
     if(1 != EVP_DigestFinal_ex(mdctx, *digest, digestLen))
         return -1;
     
@@ -362,133 +516,20 @@ int DigestMessage(const char *message, size_t messageLen, unsigned char **digest
     EVP_MD_CTX_free(mdctx);
     
     return 0;
+    
+    /* Alternative approach:
+        messageDigest.hashAlg = TPM_ALG_SHA256;
+        // hash algorithm mapped to size
+        sizeInBytes = TSS_GetDigestSize(messageDigest.hashAlg);
+        rc = TSS_Hash_Generate(&messageDigest,
+                               strlen(messageString), messageString,
+                               0, NULL);    
+     */
 }
 
+// Eror code plotter for TSS error codes
 void ErrorCodePlotter(TPM_RC rc){
     const char *msg, *submsg, *num;
     TSS_ResponseCode_toString(&msg, &submsg, &num, rc);
     printf("rc: %08x: %s%s%s\n", rc, msg, submsg, num);
 }
-
-// Create a restricted RSA signing key.
-//// Assume this key is trusted by the remote verifier.
-//    //var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
-//    CreatePrimary_In inPrimary;
-//    CreatePrimary_Out outPrimary;
-//    TPMI_DH_OBJECT signHandle = 0;
-//    
-//    inPrimary.primaryHandle = TPM_RH_OWNER;  //TPM_RH_NULL, TPM_RH_PLATFORM, TPM_RH_OWNER, TPM_RH_ENDORSEMENT
-//    inPrimary.inSensitive.sensitive.userAuth.t.size = 0;    // No key Password
-//    inPrimary.inSensitive.sensitive.data.t.size = 0;
-//    TPMA_OBJECT addObjectAttributes;
-//    TPMA_OBJECT deleteObjectAttributes;
-//    addObjectAttributes.val = 0;
-//    addObjectAttributes.val |= TPMA_OBJECT_RESTRICTED;
-//    addObjectAttributes.val |= TPMA_OBJECT_SIGN;
-//    deleteObjectAttributes.val = 0;
-//    rc = asymPublicTemplate(&inPrimary.inPublic.publicArea,
-//				    addObjectAttributes,
-//                                    deleteObjectAttributes,
-//				    TYPE_ST,                    // keyType
-//                                    TPM_ALG_RSA,                // algPublic
-//                                    TPM_ECC_NONE,               // curveID
-//                                    TPM_ALG_SHA256,             // nalg
-//                                    TPM_ALG_SHA256,             // halg
-//                                    NULL);                      // policyFilename
-//    if(TPM_RC_SUCCESS != rc){
-//        ErrorCodePlotter(rc);
-//        return -1;
-//    }
-//    inPrimary.inPublic.publicArea.unique.rsa.t.size = 0;
-//    inPrimary.outsideInfo.t.size = 0;
-//    inPrimary.creationPCR.count = 0;
-//    
-//    rc = TSS_Create(&tssContext);
-//    if(TPM_RC_SUCCESS != rc){
-//        ErrorCodePlotter(rc);
-//        return -1;
-//    }
-//    
-//    rc = TSS_Execute(tssContext,
-//                    (RESPONSE_PARAMETERS *)&outPrimary, 
-//                    (COMMAND_PARAMETERS *)&inPrimary,
-//                    NULL,
-//                    TPM_CC_CreatePrimary,
-//                    TPM_RS_PW, NULL, 0,     // parentPasswordPtr
-//                    TPM_RH_NULL, NULL, 0);
-//    if(TPM_RC_SUCCESS != rc){
-//        ErrorCodePlotter(rc);
-//        return -1;
-//    }
-//    
-//    signHandle = outPrimary.objectHandle;
-//    
-//    rc = TSS_Delete(tssContext);
-//    if(TPM_RC_SUCCESS != rc){
-//        ErrorCodePlotter(rc);
-//        return -1;
-//    }
-
-/*
-// Sign PCR quote with random nonce.
-    // Quote
-    // Unlike TPM2_PCR_Read() it gives a digest of the selected PCRs
-    // Does not take the challenge as input yet
-    Quote_In inQuote;
-    Quote_Out outQuote;
-    
-    inQuote.PCRselect.pcrSelections[0].sizeofSelect = 3;
-    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] = 0;
-    inQuote.PCRselect.pcrSelections[0].pcrSelect[1] = 0;
-    inQuote.PCRselect.pcrSelections[0].pcrSelect[2] = 0;
-    // accumulate PCR select bits: inQuote.PCRselect.pcrSelections[0].pcrSelect[pcrHandle / 8] |= 1 << (pcrHandle % 8);
-    inQuote.PCRselect.pcrSelections[0].pcrSelect[0] |= (1<<0) | (1<<1);
-    inQuote.PCRselect.count = 2;
-    inQuote.PCRselect.pcrSelections[0].hash = TPM_ALG_SHA256;
-    inQuote.signHandle = signHandle;
-    inQuote.inScheme.scheme = TPM_ALG_RSASSA;
-    inQuote.inScheme.details.rsassa.hashAlg = TPM_ALG_SHA256;
-    memcpy(inQuote.qualifyingData.t.buffer, &challenge, sizeof(challenge));
-    inQuote.qualifyingData.t.size = sizeof(challenge);
-    
-    
-    rc = TSS_Create(&tssContext);
-    if(TPM_RC_SUCCESS != rc){
-        ErrorCodePlotter(rc);
-        return -1;
-    }
-    
-    rc = TSS_Execute(tssContext,
-                    (RESPONSE_PARAMETERS *)&outQuote,
-                    (COMMAND_PARAMETERS *)&inQuote,
-                    NULL,
-                    TPM_CC_Quote,
-                    TPM_RS_PW, NULL, 0,
-                    TPM_RH_NULL, NULL, 0);
-    if(TPM_RC_SUCCESS != rc){
-        printf("hier?\n");
-        ErrorCodePlotter(rc);
-        return -1;
-    }
-    
-    rc = TSS_Delete(tssContext);
-    if(TPM_RC_SUCCESS != rc){
-        ErrorCodePlotter(rc);
-        return -1;
-    }
-    */
-    
-// Unload key.
-// Build forge RSA public key.
-// Build forge signature blob.
-// Compute message digest.
-// Remote attester verifies signature.
-// Unmarshal the serialized TPMS_ATTEST buffer.
-// Extract the nonce from the tpm2b_attest buffer.
-  // It should match the random challenge that we sent. This proves the attested data is fresh.
-// Playback digests from boot_log.
-// app.Quote selects PCR0, PCR1, PCR2 and PCR3. Therefore, the expected quote
-  // is the digest of <PCR0, PCR1, PCR2, PCR3>.  
-// Extract selected PCRs digest from the tpm2b_attest buffer.
-  // It should match the expected digest computed above.
-// Boot log's integrity is verified. Its contents can be used for host integrity evaluation.

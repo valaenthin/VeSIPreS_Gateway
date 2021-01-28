@@ -9,19 +9,19 @@ CND_DISTDIR=dist
 # Debug configuration
 CND_PLATFORM_Debug=GNU-Linux
 CND_ARTIFACT_DIR_Debug=dist/Debug/GNU-Linux
-CND_ARTIFACT_NAME_Debug=attestation
-CND_ARTIFACT_PATH_Debug=dist/Debug/GNU-Linux/attestation
+CND_ARTIFACT_NAME_Debug=vesipres_gateway
+CND_ARTIFACT_PATH_Debug=dist/Debug/GNU-Linux/vesipres_gateway
 CND_PACKAGE_DIR_Debug=dist/Debug/GNU-Linux/package
-CND_PACKAGE_NAME_Debug=attestation.tar
-CND_PACKAGE_PATH_Debug=dist/Debug/GNU-Linux/package/attestation.tar
+CND_PACKAGE_NAME_Debug=vesipresgateway.tar
+CND_PACKAGE_PATH_Debug=dist/Debug/GNU-Linux/package/vesipresgateway.tar
 # Release configuration
 CND_PLATFORM_Release=GNU-Linux
 CND_ARTIFACT_DIR_Release=dist/Release/GNU-Linux
-CND_ARTIFACT_NAME_Release=attestation
-CND_ARTIFACT_PATH_Release=dist/Release/GNU-Linux/attestation
+CND_ARTIFACT_NAME_Release=vesipres_gateway
+CND_ARTIFACT_PATH_Release=dist/Release/GNU-Linux/vesipres_gateway
 CND_PACKAGE_DIR_Release=dist/Release/GNU-Linux/package
-CND_PACKAGE_NAME_Release=attestation.tar
-CND_PACKAGE_PATH_Release=dist/Release/GNU-Linux/package/attestation.tar
+CND_PACKAGE_NAME_Release=vesipresgateway.tar
+CND_PACKAGE_PATH_Release=dist/Release/GNU-Linux/package/vesipresgateway.tar
 #
 # include compiler specific variables
 #
